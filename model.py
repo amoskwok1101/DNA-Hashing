@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Function
 from noise import noisy, noisy_dna
+from torch.cuda.amp import autocast, GradScaler
+scaler = GradScaler()
 
 def reparameterize(mu, logvar):
     std = torch.exp(0.5*logvar)
@@ -54,6 +56,8 @@ class TextModel(nn.Module):
         self.embed.weight.data.uniform_(-initrange, initrange)
         self.proj.bias.data.zero_()
         self.proj.weight.data.uniform_(-initrange, initrange)
+        self.scalerD = GradScaler()
+        self.scaler = GradScaler()
 
 class DAE(TextModel):
     """Denoising Auto-Encoder"""
@@ -79,10 +83,15 @@ class DAE(TextModel):
         self.G.flatten_parameters()
 
     def attention_net(self, lstm_output, final_state):
-        hidden = final_state.view(-1, self.args.dim_h * 2, self.args.nlayers)
+        final_state = final_state[-2:]
+        hidden = final_state.view(-1, self.args.dim_h * 2, 1)
         attn_weights = torch.bmm(lstm_output, hidden).squeeze(2)
+        # print(attn_weights.shape)
         soft_attn_weights = F.softmax(attn_weights, 1)
+        # print(soft_attn_weights.shape)
+        
         context = torch.bmm(lstm_output.transpose(1, 2), soft_attn_weights.unsqueeze(2)).squeeze(2)
+            
         return context, soft_attn_weights.data 
 
     def encode(self, input):
@@ -91,6 +100,7 @@ class DAE(TextModel):
         #_, (h, _) = self.E(input)
         #h = torch.cat([h[-2], h[-1]], 1)
         output, (final_hidden_state, final_cell_state) = self.E(input)
+        
         if self.args.no_Attention:
             h = torch.cat([final_hidden_state[-2], final_hidden_state[-1]], 1)
         else:
@@ -152,18 +162,22 @@ class DAE(TextModel):
                 input = torch.multinomial(logits_exp.squeeze(dim=0), num_samples=1).t()
         return torch.cat(sents)
 
-    def forward(self, inputs, is_test=False):
+    def forward(self, inputs, targets, is_test=False,is_evaluate=False):
         if self.args.is_triplet:
+            
             if self.args.distance_type == 'hamming':
-                return self.encode2binary(inputs, is_test)
+                mu, logvar, anchor =  self.encode2binary(inputs, is_test)
             else:
-                return self.encode2z(inputs, is_test)
+                mu, logvar, anchor =  self.encode2z(inputs, is_test)
+            return self.autoenc(inputs, targets, mu, logvar, anchor, None, is_test, is_evaluate),anchor.clone()
+            
         else:
             _inputs = noisy(self.vocab, input, *self.args.noise) if is_test == False else inputs
             mu, logvar = self.encode(_inputs)
             z = reparameterize(mu, logvar)
             logits, _ = self.decode(z, input)
-            return mu, logvar, z, logits
+            
+            return self.autoenc(inputs, targets, mu, logvar, z, logits, is_test, is_evaluate)
 
     def loss_rec(self, logits, targets):
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -175,9 +189,9 @@ class DAE(TextModel):
             return losses['triplet']
         else:
             return losses['rec']
-
+        
     def generate_triplet(self, inputs, is_test=False):
-        mu, logvar, anchor = self(inputs, is_test)
+        # mu, logvar, anchor = self(inputs, is_test)
         mutation_rate = np.random.uniform(self.args.similar_noise, self.args.divergent_noise)
         used_margin = mutation_rate - self.args.similar_noise
         mutation_type = np.random.randint(4)
@@ -194,23 +208,28 @@ class DAE(TextModel):
         else:
             _, _, positive = self.encode2z(similar_inputs, is_test)
             _, _, negative = self.encode2z(divergent_inputs, is_test)
-        return mu, logvar, anchor, positive, negative, used_margin
-
-    def autoenc(self, inputs, targets, is_test=False, is_evaluate=False):
+        return positive, negative, used_margin
+    
+    def autoenc(self, inputs, targets, mu, logvar, anchor, logits, is_test=False, is_evaluate=False):
         if self.args.is_triplet:
-            mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
+            positive, negative, used_margin = self.generate_triplet(inputs, is_test)
             return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin)}
         else:
-            _, _, _, logits = self(inputs, is_test)
+            # _, _, _, logits = self(inputs, is_test)
             return {'rec': self.loss_rec(logits, targets).mean()}
 
-    def step(self, losses):
+    def step(self, accelerator, losses, enable_Scaler=True):
         self.opt.zero_grad()
-        losses['loss'].backward()
-        # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        #nn.utils.clip_grad_norm_(self.parameters(), clip)
-        self.opt.step()
-        #self.scheduler.step()
+        if enable_Scaler:
+            
+            accelerator.backward(self.scaler.scale(losses['loss']))
+            self.scaler.step(self.opt)
+            self.scaler.update()
+        else:
+            accelerator.backward(losses['loss'])
+            # torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+            # losses['loss'].backward()
+            self.opt.step()
         
     def nll_is(self, inputs, targets, m):
         """compute negative log-likelihood by importance sampling:
@@ -288,32 +307,31 @@ class VAE(DAE):
         else:
             return losses['rec'] + self.args.lambda_kl * losses['kl']
 
-    def autoenc(self, inputs, targets, is_test=False, is_evaluate=False):
+    def autoenc(self, inputs, targets, mu, logvar, anchor, logits, is_test=False, is_evaluate=False):
         if self.args.is_triplet:
-            mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
+            positive, negative, used_margin = self.generate_triplet(inputs, is_test)
             return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin),
                     'kl': loss_kl(mu, logvar)}
         else:
-            mu, logvar, _, logits = self(inputs, is_test)
+            # mu, logvar, _, logits = self(inputs, is_test)
             return {'rec': self.loss_rec(logits, targets).mean(),
                     'kl': loss_kl(mu, logvar)}
-               
 class AAE(DAE):
     """Adversarial Auto-Encoder"""
 
     def __init__(self, vocab, args):
         super().__init__(vocab, args)
         self.D = nn.Sequential(nn.Linear(args.dim_z, args.dim_d), nn.ReLU(),
-            nn.Linear(args.dim_d, 1), nn.Sigmoid())
+            nn.Linear(args.dim_d, 1))
         self.optD = optim.Adam(self.D.parameters(), lr=args.lr, betas=(0.5, 0.999))
 
     def loss_adv(self, z):
         zn = torch.randn_like(z)
         zeros = torch.zeros(len(z), 1, device=z.device)
         ones = torch.ones(len(z), 1, device=z.device)
-        loss_d = F.binary_cross_entropy(self.D(z.detach()), zeros) + \
-            F.binary_cross_entropy(self.D(zn), ones)
-        loss_g = F.binary_cross_entropy(self.D(z), ones)
+        loss_d = F.binary_cross_entropy_with_logits(self.D(z.detach()), zeros) + \
+            F.binary_cross_entropy_with_logits(self.D(zn), ones)
+        loss_g = F.binary_cross_entropy_with_logits(self.D(z), ones)
         return loss_d, loss_g
 
     def loss(self, losses):
@@ -323,10 +341,30 @@ class AAE(DAE):
         else:
             return losses['rec'] + self.args.lambda_adv * losses['adv'] + \
                 self.args.lambda_p * losses['|lvar|']
-    
-    def autoenc(self, inputs, targets, is_test=False, is_evaluate=False):
+                
+    def forward(self, inputs, targets, is_test=False,is_evaluate=False,is_D=False):
         if self.args.is_triplet:
-            mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
+            if is_D==False:
+                if self.args.distance_type == 'hamming':
+                    mu, logvar, anchor =  self.encode2binary(inputs, is_test)
+                else:
+                    mu, logvar, anchor =  self.encode2z(inputs, is_test)
+                return self.autoenc(inputs, targets, mu, logvar, anchor, None, is_test, is_evaluate),anchor.clone()
+            else:
+                loss_d, adv = self.loss_adv(inputs)
+                return loss_d
+            
+        else:
+            _inputs = noisy(self.vocab, input, *self.args.noise) if is_test == False else inputs
+            mu, logvar = self.encode(_inputs)
+            z = reparameterize(mu, logvar)
+            logits, _ = self.decode(z, input)
+            
+            return self.autoenc(inputs, targets, mu, logvar, z, logits, is_test, is_evaluate)
+        
+    def autoenc(self, inputs, targets, mu, logvar, anchor, logits, is_test=False, is_evaluate=False):
+        if self.args.is_triplet:
+            positive, negative, used_margin = self.generate_triplet(inputs, is_test)
             adv_z = anchor if is_test == False else mu
             loss_d, adv = self.loss_adv(adv_z)
             #loss_d_p, adv_p = self.loss_adv(positive) 
@@ -334,18 +372,33 @@ class AAE(DAE):
             return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin),
                 'adv': adv,
                 '|lvar|': logvar.abs().sum(dim=1).mean(),
-                'loss_d': loss_d}
+                'loss_d': loss_d
+                }
         else:
-            _, logvar, z, logits = self(inputs, is_test)
+            # _, logvar, z, logits = self(inputs, is_test)
             loss_d, adv = self.loss_adv(z)
             return {'rec': self.loss_rec(logits, targets).mean(),
                 'adv': adv,
                 '|lvar|': logvar.abs().sum(dim=1).mean(),
                 'loss_d': loss_d}
 
-    def step(self, losses):
-        super().step(losses)
+    def step(self, accelerator, losses, enable_Scaler=True,is_D=False):
+        # losses_clone = losses.copy()
+        if is_D==False:
+            super().step(accelerator,losses, enable_Scaler)
+        else:
+        # super().step(accelerator,losses, anchor, enable_Scaler=enable_Scaler)
 
-        self.optD.zero_grad()
-        losses['loss_d'].backward()
-        self.optD.step()
+            self.optD.zero_grad()
+            
+            if enable_Scaler:
+                # print(“ScalerD”)
+                accelerator.backward(self.scalerD.scale(losses))
+                self.scalerD.step(self.optD)
+                self.scalerD.update()
+            else:
+                # losses
+                # losses['loss_d'].backward()
+                accelerator.backward(losses)
+                # torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
+                self.optD.step()
