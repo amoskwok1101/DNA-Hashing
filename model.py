@@ -5,8 +5,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Function
 from noise import noisy, noisy_dna
+from batchify import tokenization, convert_sequences_to_kmers
+import math
 from torch.cuda.amp import autocast, GradScaler
-scaler = GradScaler()
 
 def reparameterize(mu, logvar):
     std = torch.exp(0.5*logvar)
@@ -56,8 +57,6 @@ class TextModel(nn.Module):
         self.embed.weight.data.uniform_(-initrange, initrange)
         self.proj.bias.data.zero_()
         self.proj.weight.data.uniform_(-initrange, initrange)
-        self.scalerD = GradScaler()
-        self.scaler = GradScaler()
 
 class DAE(TextModel):
     """Denoising Auto-Encoder"""
@@ -75,23 +74,26 @@ class DAE(TextModel):
         self.h2U = nn.ModuleList([nn.Linear(args.dim_h*2, args.dim_z) for i in range(args.rank)])
 
         self.z2emb = nn.Linear(args.dim_z, args.dim_emb) #for decoder used
+        if args.use_transformer:
+            self.transformer = TransformerEncoder(num_tokens=vocab.size, dim_model=args.dim_emb, num_heads=4, num_encoder_layers=2, dropout_p=args.dropout)
+            self.h2mu = nn.Linear(args.dim_emb, args.dim_z)
+            self.h2logvar = nn.Linear(args.dim_emb, args.dim_z)
+            # #new add
+            self.h2U = nn.ModuleList([nn.Linear(args.dim_emb, args.dim_z) for i in range(args.rank)])
         self.opt = optim.Adam(self.parameters(), lr=args.lr, betas=(0.5, 0.999))
         self.scheduler = optim.lr_scheduler.OneCycleLR(self.opt, max_lr=0.001, steps_per_epoch=args.steps_per_epoch, epochs=args.epochs)
+
+        self.scaler = GradScaler()
 
     def flatten(self):
         self.E.flatten_parameters()
         self.G.flatten_parameters()
 
     def attention_net(self, lstm_output, final_state):
-        final_state = final_state[-2:]
-        hidden = final_state.view(-1, self.args.dim_h * 2, 1)
+        hidden = final_state.view(-1, self.args.dim_h * 2, self.args.nlayers)
         attn_weights = torch.bmm(lstm_output, hidden).squeeze(2)
-        # print(attn_weights.shape)
         soft_attn_weights = F.softmax(attn_weights, 1)
-        # print(soft_attn_weights.shape)
-        
         context = torch.bmm(lstm_output.transpose(1, 2), soft_attn_weights.unsqueeze(2)).squeeze(2)
-            
         return context, soft_attn_weights.data 
 
     def encode(self, input):
@@ -100,7 +102,6 @@ class DAE(TextModel):
         #_, (h, _) = self.E(input)
         #h = torch.cat([h[-2], h[-1]], 1)
         output, (final_hidden_state, final_cell_state) = self.E(input)
-        
         if self.args.no_Attention:
             h = torch.cat([final_hidden_state[-2], final_hidden_state[-1]], 1)
         else:
@@ -162,22 +163,20 @@ class DAE(TextModel):
                 input = torch.multinomial(logits_exp.squeeze(dim=0), num_samples=1).t()
         return torch.cat(sents)
 
-    def forward(self, inputs, targets, is_test=False,is_evaluate=False):
+    def forward(self, inputs, is_test=False):
         if self.args.is_triplet:
-            
-            if self.args.distance_type == 'hamming':
-                mu, logvar, anchor =  self.encode2binary(inputs, is_test)
-            else:
-                mu, logvar, anchor =  self.encode2z(inputs, is_test)
-            return self.autoenc(inputs, targets, mu, logvar, anchor, None, is_test, is_evaluate),anchor.clone()
-            
+            # if self.args.distance_type == 'hamming':
+            #     mu, logvar, anchor = self.encode2binary(inputs, is_test)
+            # else:
+            #     mu, logvar, anchor = self.encode2z(inputs, is_test)
+            losses, anchor = self.autoenc(inputs, is_test)
+            return  losses, anchor
         else:
             _inputs = noisy(self.vocab, input, *self.args.noise) if is_test == False else inputs
             mu, logvar = self.encode(_inputs)
             z = reparameterize(mu, logvar)
             logits, _ = self.decode(z, input)
-            
-            return self.autoenc(inputs, targets, mu, logvar, z, logits, is_test, is_evaluate)
+            return mu, logvar, z, logits
 
     def loss_rec(self, logits, targets):
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
@@ -189,9 +188,8 @@ class DAE(TextModel):
             return losses['triplet']
         else:
             return losses['rec']
-        
+
     def generate_triplet(self, inputs, is_test=False):
-        # mu, logvar, anchor = self(inputs, is_test)
         mutation_rate = np.random.uniform(self.args.similar_noise, self.args.divergent_noise)
         used_margin = mutation_rate - self.args.similar_noise
         mutation_type = np.random.randint(4)
@@ -199,38 +197,62 @@ class DAE(TextModel):
         divergent_noises = [0,0,0,0]
         similar_noises[mutation_type] = self.args.similar_noise
         divergent_noises[mutation_type] = mutation_rate
-        similar_inputs = noisy(self.vocab, inputs, *similar_noises)
-        divergent_inputs = noisy(self.vocab, inputs, *divergent_noises)
+        similar_inputs = noisy_dna(inputs, *similar_noises)
+        divergent_inputs = noisy_dna(inputs, *divergent_noises)
+
+        inputs = convert_sequences_to_kmers(inputs, self.args.k)
+        similar_inputs = convert_sequences_to_kmers(similar_inputs, self.args.k)
+        divergent_inputs = convert_sequences_to_kmers(divergent_inputs, self.args.k)
+
+        inputs, _ = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
+        similar_inputs, _ = tokenization(similar_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
+        divergent_inputs, _ = tokenization(divergent_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
+        
+        # mu, logvar, anchor = self(inputs, is_test)
         #print("{0} {1}".format(similar_noises, divergent_noises))
         if self.args.distance_type == 'hamming':
+            mu, logvar, anchor = self.encode2binary(inputs, is_test)
             _, _, positive = self.encode2binary(similar_inputs, is_test)
             _, _, negative = self.encode2binary(divergent_inputs, is_test)
         else:
+            mu, logvar, anchor = self.encode2z(inputs, is_test)
             _, _, positive = self.encode2z(similar_inputs, is_test)
             _, _, negative = self.encode2z(divergent_inputs, is_test)
-        return positive, negative, used_margin
-    
-    def autoenc(self, inputs, targets, mu, logvar, anchor, logits, is_test=False, is_evaluate=False):
+        return mu, logvar, anchor, positive, negative, used_margin
+
+    def autoenc(self, inputs, mu, logvar, anchor, is_test=False, is_evaluate=False):
         if self.args.is_triplet:
-            positive, negative, used_margin = self.generate_triplet(inputs, is_test)
-            return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin)}
+            mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
+            return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin)}, anchor
         else:
-            # _, _, _, logits = self(inputs, is_test)
+            inputs = convert_sequences_to_kmers(inputs, self.args.k)
+            inputs, targets = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)                                                                      
+            _, _, _, logits = self(inputs, is_test)
             return {'rec': self.loss_rec(logits, targets).mean()}
 
-    def step(self, accelerator, losses, enable_Scaler=True):
+    # def step(self, losses):
+    #     self.opt.zero_grad()
+    #     losses['loss'].backward()
+    #     # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
+    #     #nn.utils.clip_grad_norm_(self.parameters(), clip)
+    #     self.opt.step()
+    #     #self.scheduler.step()
+    
+    def step(self, accelerator, losses, custom_lr=None):
+        if custom_lr is not None:
+            for param_group in self.opt.param_groups:
+                param_group['lr'] = custom_lr
+
         self.opt.zero_grad()
-        if enable_Scaler:
-            
+        if self.args.use_amp:
+            # self.scaler.scale(losses['loss']).backward()
             accelerator.backward(self.scaler.scale(losses['loss']))
             self.scaler.step(self.opt)
             self.scaler.update()
         else:
             accelerator.backward(losses['loss'])
-            # torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
-            # losses['loss'].backward()
             self.opt.step()
-        
+
     def nll_is(self, inputs, targets, m):
         """compute negative log-likelihood by importance sampling:
            p(x;theta) = E_{q(z|x;phi)}[p(z)p(x|z;theta)/q(z|x;phi)]
@@ -307,23 +329,30 @@ class VAE(DAE):
         else:
             return losses['rec'] + self.args.lambda_kl * losses['kl']
 
-    def autoenc(self, inputs, targets, mu, logvar, anchor, logits, is_test=False, is_evaluate=False):
+    def autoenc(self, inputs, targets, is_test=False, is_evaluate=False):
         if self.args.is_triplet:
-            positive, negative, used_margin = self.generate_triplet(inputs, is_test)
+            mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
             return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin),
-                    'kl': loss_kl(mu, logvar)}
+                    'kl': loss_kl(mu, logvar)}, anchor.clone()
         else:
-            # mu, logvar, _, logits = self(inputs, is_test)
+            inputs = convert_sequences_to_kmers(inputs, self.args.k)
+            inputs, targets = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1) 
+            mu, logvar, _, logits = self(inputs, is_test)
             return {'rec': self.loss_rec(logits, targets).mean(),
                     'kl': loss_kl(mu, logvar)}
+               
 class AAE(DAE):
     """Adversarial Auto-Encoder"""
 
     def __init__(self, vocab, args):
         super().__init__(vocab, args)
         self.D = nn.Sequential(nn.Linear(args.dim_z, args.dim_d), nn.ReLU(),
-            nn.Linear(args.dim_d, 1))
+            nn.Linear(args.dim_d, 1), 
+            # nn.Sigmoid()
+            )
         self.optD = optim.Adam(self.D.parameters(), lr=args.lr, betas=(0.5, 0.999))
+
+        self.scalerD = GradScaler() # scaler for discriminator
 
     def loss_adv(self, z):
         zn = torch.randn_like(z)
@@ -341,30 +370,29 @@ class AAE(DAE):
         else:
             return losses['rec'] + self.args.lambda_adv * losses['adv'] + \
                 self.args.lambda_p * losses['|lvar|']
-                
-    def forward(self, inputs, targets, is_test=False,is_evaluate=False,is_D=False):
+        
+    def forward(self, inputs, is_test=False, is_D=False):
         if self.args.is_triplet:
             if is_D==False:
-                if self.args.distance_type == 'hamming':
-                    mu, logvar, anchor =  self.encode2binary(inputs, is_test)
-                else:
-                    mu, logvar, anchor =  self.encode2z(inputs, is_test)
-                return self.autoenc(inputs, targets, mu, logvar, anchor, None, is_test, is_evaluate),anchor.clone()
+                # if self.args.distance_type == 'hamming':
+                #     mu, logvar, anchor = self.encode2binary(inputs, is_test)
+                # else:
+                #     mu, logvar, anchor = self.encode2z(inputs, is_test)
+                losses, anchor = self.autoenc(inputs, is_test)
+                return  losses, anchor
             else:
                 loss_d, adv = self.loss_adv(inputs)
                 return loss_d
-            
         else:
             _inputs = noisy(self.vocab, input, *self.args.noise) if is_test == False else inputs
             mu, logvar = self.encode(_inputs)
             z = reparameterize(mu, logvar)
             logits, _ = self.decode(z, input)
-            
-            return self.autoenc(inputs, targets, mu, logvar, z, logits, is_test, is_evaluate)
+            return mu, logvar, z, logits
         
-    def autoenc(self, inputs, targets, mu, logvar, anchor, logits, is_test=False, is_evaluate=False):
+    def autoenc(self, inputs, is_test=False, is_evaluate=False):
         if self.args.is_triplet:
-            positive, negative, used_margin = self.generate_triplet(inputs, is_test)
+            mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
             adv_z = anchor if is_test == False else mu
             loss_d, adv = self.loss_adv(adv_z)
             #loss_d_p, adv_p = self.loss_adv(positive) 
@@ -372,33 +400,104 @@ class AAE(DAE):
             return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin),
                 'adv': adv,
                 '|lvar|': logvar.abs().sum(dim=1).mean(),
-                'loss_d': loss_d
-                }
+                'loss_d': loss_d}, anchor
         else:
-            # _, logvar, z, logits = self(inputs, is_test)
+            inputs = convert_sequences_to_kmers(inputs, self.args.k)
+            inputs, targets = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)        
+            _, logvar, z, logits = self(inputs, is_test)
             loss_d, adv = self.loss_adv(z)
             return {'rec': self.loss_rec(logits, targets).mean(),
                 'adv': adv,
                 '|lvar|': logvar.abs().sum(dim=1).mean(),
                 'loss_d': loss_d}
 
-    def step(self, accelerator, losses, enable_Scaler=True,is_D=False):
-        # losses_clone = losses.copy()
-        if is_D==False:
-            super().step(accelerator,losses, enable_Scaler)
+    def step(self, accelerator, losses, custom_lr=None, is_D=False):
+        if is_D == False:
+            super().step(accelerator, losses)
         else:
-        # super().step(accelerator,losses, anchor, enable_Scaler=enable_Scaler)
-
+            if custom_lr is not None:
+                for param_group in self.optD.param_groups:
+                    param_group['lr'] = custom_lr
             self.optD.zero_grad()
-            
-            if enable_Scaler:
-                # print(“ScalerD”)
-                accelerator.backward(self.scalerD.scale(losses))
+            if self.args.use_amp:
+                accelerator.backward(self.scalerD.scale(losses['loss_d']))
                 self.scalerD.step(self.optD)
                 self.scalerD.update()
             else:
-                # losses
-                # losses['loss_d'].backward()
-                accelerator.backward(losses)
-                # torch.nn.utils.clip_grad_norm_(self.D.parameters(), max_norm=1.0)
+                accelerator.backward(losses['loss_d'])
                 self.optD.step()
+class TransformerEncoder(nn.Module):
+    """
+    Encoder-only Transformer model.
+    """
+
+    # Constructor
+    def __init__(
+        self,
+        num_tokens,
+        dim_model,
+        num_heads,
+        num_encoder_layers,
+        dropout_p,
+    ):
+        super().__init__()
+
+        # INFO
+        self.dim_model = dim_model
+
+        # LAYERS
+        self.positional_encoder = PositionalEncoding(
+            dim_model=dim_model, dropout_p=dropout_p, max_len=5000
+        )
+        self.embedding = nn.Embedding(num_tokens, dim_model)
+        self.transformer = nn.Transformer(
+            d_model=dim_model,
+            nhead=num_heads,
+            num_encoder_layers=num_encoder_layers,
+            num_decoder_layers=0,  # No decoder layers
+            dropout=dropout_p,
+        )
+
+    def forward(self, src):
+        # Src size must be (batch_size, src sequence length)
+
+        # Embedding + positional encoding - Out size = (batch_size, sequence length, dim_model)
+        src = self.embedding(src) * math.sqrt(self.dim_model)
+        src = self.positional_encoder(src)
+
+        # Permute to shape (sequence length, batch_size, dim_model)
+        src = src.permute(1, 0, 2)
+
+        # Transformer encoder blocks - Out size = (sequence length, batch_size, dim_model)
+        encoder_output = self.transformer.encoder(src)
+
+        # Permute back to shape (batch_size, sequence length, dim_model) for output
+        encoder_output = encoder_output.permute(1, 0, 2)
+
+        return encoder_output
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, dim_model, dropout_p, max_len):
+        super().__init__()
+        
+        # Info
+        self.dropout = nn.Dropout(dropout_p)
+        
+        # Encoding - From formula
+        pos_encoding = torch.zeros(max_len, dim_model)
+        positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1) # 0, 1, 2, 3, 4, 5
+        division_term = torch.exp(torch.arange(0, dim_model, 2).float() * (-math.log(10000.0)) / dim_model) # 1000^(2i/dim_model)
+        
+        # PE(pos, 2i) = sin(pos/1000^(2i/dim_model))
+        pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
+        
+        # PE(pos, 2i + 1) = cos(pos/1000^(2i/dim_model))
+        pos_encoding[:, 1::2] = torch.cos(positions_list * division_term)
+        
+        # Saving buffer (same as parameter without gradients needed)
+        pos_encoding = pos_encoding.unsqueeze(0).transpose(0, 1)
+        self.register_buffer("pos_encoding",pos_encoding)
+        
+    def forward(self, token_embedding: torch.tensor) -> torch.tensor:
+        # Residual connection + pos encoding
+        return self.dropout(token_embedding + self.pos_encoding[:token_embedding.size(0), :])

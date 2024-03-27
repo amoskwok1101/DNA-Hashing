@@ -3,10 +3,35 @@ import numpy as np
 import torch
 import time
 
-#def set_seed(seed):     # set the random seed for reproducibility
-#    random.seed(seed)
-#    np.random.seed(seed)
-#    torch.manual_seed(seed)
+def linear_decay_scheduler(current_epoch, total_epochs, initial_learning_rate, final_learning_rate):
+    """
+    Calculate the learning rate for a given epoch based on linear decay.
+
+    Parameters:
+    - current_epoch: int, the current epoch number (zero-indexed).
+    - total_epochs: int, the total number of epochs over which the decay occurs.
+    - initial_learning_rate: float, the learning rate at the start of training.
+    - final_learning_rate: float, the learning rate at the end of training.
+
+    Returns:
+    - current_learning_rate: float, the learning rate for the current epoch.
+    """
+    
+    if current_epoch < total_epochs:
+        # Calculate the linear decay rate
+        decay_rate = (initial_learning_rate - final_learning_rate) / (total_epochs - 1)
+        # Apply the decay
+        current_learning_rate = initial_learning_rate - decay_rate * current_epoch
+    else:
+        # Once we reach or surpass total_epochs, just use the final learning rate
+        current_learning_rate = final_learning_rate
+    
+    return current_learning_rate
+
+def set_custom_seed(seed):     # set the random seed for reproducibility
+   random.seed(seed)
+   np.random.seed(seed)
+   torch.manual_seed(seed)
 
 def set_seed():     # set the random seed for reproducibility
     seed = (int)(time.time())

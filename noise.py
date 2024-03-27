@@ -15,9 +15,10 @@ def word_drop(vocab, x, p):     # drop words with probability p
     x_ = []
     for i in range(x.size(1)):
         words = x[:, i].tolist()
-        keep = np.random.rand(len(words)) > p
-        keep[0] = True  # do not drop the start sentence symbol
-        sent = [w for j, w in enumerate(words) if keep[j]]
+        num_drop = round((len(words) - 1) * p) # do not drop the start sentence symbol
+        indices = random.sample(range(1, len(words)), num_drop)
+        indices = set(indices)
+        sent = [w for j, w in enumerate(words) if j not in indices]
         sent += [vocab.pad] * (len(words)-len(sent))
         x_.append(sent)
     return torch.LongTensor(x_).t().contiguous().to(x.device)
@@ -27,7 +28,9 @@ def word_add(vocab, x, p):     # add words with probability p
     for i in range(x.size(1)):
         words = x[:, i].tolist()
         num_add = round((len(words) - 1) * p) # do not add before the start sentence symbol
-        indices = random.sample(range(1, len(words)), num_add)
+        #the added position must be before len(words)-num_add
+        #such that the additions will be kept after the trimming to original length
+        indices = random.sample(range(1, len(words)-num_add), num_add) 
         ran_num = np.random.randint(vocab.nspecial, vocab.size, num_add)
         for i, index in enumerate(sorted(indices, reverse=True)):
             words.insert(index, ran_num[i])
@@ -43,28 +46,34 @@ def word_blank(vocab, x, p):     # blank words with probability p
     return x_
 
 def word_substitute(vocab, x, p):     # substitute words with probability p
-    keep = (torch.rand(x.size(), device=x.device) > p) | \
-        (x == vocab.go) | (x == vocab.pad)
-    x_ = x.clone()
-    x_.random_(vocab.nspecial, vocab.size)
-    x_[keep] = x[keep]
-    return x_
+    x_ = []
+    alphabet = range(vocab.nspecial, vocab.size)
+    for i in range(x.size(1)):
+        words = x[:, i].tolist()
+        num_substitute = round((len(words) - 1) * p) # do not substitute the start sentence symbol
+        indices = random.sample(range(1, len(words)), num_substitute)
+        for i, index in enumerate(sorted(indices)):
+            words[index] = random.choice([num for num in alphabet if num != words[index]])
+        x_.append(words)
+    return torch.LongTensor(x_).t().contiguous().to(x.device)
 
 def word_drop_add_substitute(vocab, x, p):     # drop/add/substitute words with probability p
     x_ = []
+    alphabet = range(vocab.nspecial, vocab.size)
     for i in range(x.size(1)):
         char_list = x[:, i].tolist()
-        num = round((len(char_list) - 1) * p) # do not change at the start sentence symbol
-        indices = random.sample(range(1, len(char_list)), num)
-        ran_num = np.random.randint(vocab.nspecial, vocab.size, num)
+        mutation_num = round((len(char_list) - 1) * p) # do not change at the start sentence symbol
+        #the added position must be before len(words)-mutation_num
+        #such that the additions will be kept after the trimming to original length
+        indices = random.sample(range(1, len(char_list)-mutation_num), mutation_num)
         for i, index in enumerate(sorted(indices, reverse=True)):
             mutation_type = random.choice(range(3))
             if mutation_type == 0: #drop
                 char_list.pop(index)
             elif mutation_type == 1: #add
-                char_list.insert(index, ran_num[i])
+                char_list.insert(index, random.choice(alphabet))
             else: #substitute
-                char_list[index] = ran_num[i]
+                char_list[index] = random.choice([num for num in alphabet if num != char_list[index]])
         if len(char_list) >= x.size(0):
             sent = char_list[0:x.size(0)]
         else:
@@ -106,11 +115,11 @@ def word_add_dna(x, p):     # add words with probability p, insertion
     for s in x:
         char_list = list(s)
         num_add = round(len(char_list) * p)
-        indices = random.sample(range(len(char_list)), num_add)
+        indices = random.sample(range(len(char_list)-num_add), num_add)
         for index in sorted(indices, reverse=True):
             char_list.insert(index, random.choice(nucleotides))
-        if len(char_list) >= x.size(0):
-            char_list = char_list[0:x.size(0)]
+        if len(char_list) >= len(x[0]):
+            char_list = char_list[0:len(x[0])]
         x_.append(char_list)
     return x_
 
@@ -130,7 +139,7 @@ def word_substitute_dna(x, p):     # substitute words with probability p, mutati
 def word_drop_add_substitute_item_dna(s, p):     # drop/add/substitute words with probability p for one sent
     char_list = list(s)
     num = round(len(char_list) * p)
-    indices = random.sample(range(len(char_list)), num)
+    indices = random.sample(range(len(char_list)-num), num)
     for index in sorted(indices, reverse=True):
         mutation_type = random.choice(range(3))
         if mutation_type == 0:
@@ -148,7 +157,7 @@ def word_drop_add_substitute_dna(x, p):     # drop/add/substitute words with pro
     for s in x:
         char_list = list(s)
         num = round(len(char_list) * p)
-        indices = random.sample(range(len(char_list)), num)
+        indices = random.sample(range(len(char_list)-num), num)
         for index in sorted(indices, reverse=True):
             mutation_type = random.choice(range(3))
             if mutation_type == 0:
@@ -160,8 +169,8 @@ def word_drop_add_substitute_dna(x, p):     # drop/add/substitute words with pro
                 bases.remove(char_list[index])
                 char_list[index] = random.choice(bases)
 
-        if len(char_list) >= x.size(0):
-            char_list = char_list[0:x.size(0)]
+        if len(char_list) >= len(x[0]): #x.size(0):
+            char_list = char_list[0:len(x[0])]
         x_.append(char_list)
     return x_
 
