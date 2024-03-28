@@ -99,10 +99,10 @@ class DAE(TextModel):
         return context, soft_attn_weights.data 
 
     def encode(self, input):
-        #input = self.drop(self.embed(input)) #not use as there are denoising already
+        
         if self.args.use_transformer:
             h=self.transformer(input)[0]
-            # print(h.shape)
+            
         else:
             input = self.embed(input)                         
             #_, (h, _) = self.E(input)
@@ -140,7 +140,7 @@ class DAE(TextModel):
             z = s
         else: 
             z = mu
-        #print(z)
+        
         return mu, logvar, z
 
     def decode(self, z, input, hidden=None):
@@ -213,9 +213,7 @@ class DAE(TextModel):
         inputs, _ = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
         similar_inputs, _ = tokenization(similar_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
         divergent_inputs, _ = tokenization(divergent_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
-        # print('generate_triplet')
-        # mu, logvar, anchor = self(inputs, is_test)
-        #print("{0} {1}".format(similar_noises, divergent_noises))
+        
         if self.args.distance_type == 'hamming':
             mu, logvar, anchor = self.encode2binary(inputs, is_test)
             _, _, positive = self.encode2binary(similar_inputs, is_test)
@@ -380,11 +378,8 @@ class AAE(DAE):
     def forward(self, inputs, is_test=False, is_D=False):
         if self.args.is_triplet:
             if is_D==False:
-                # if self.args.distance_type == 'hamming':
-                #     mu, logvar, anchor = self.encode2binary(inputs, is_test)
-                # else:
-                #     mu, logvar, anchor = self.encode2z(inputs, is_test)
-                # print('forward')
+                
+                
                 losses, anchor = self.autoenc(inputs, is_test)
                 return  losses, anchor.clone()
             else:
@@ -453,7 +448,7 @@ class TransformerEncoder(nn.Module):
         self.dim_model = dim_model
 
         # LAYERS
-        print('')
+        
         self.positional_encoder = PositionalEncoding(
             dim_model=dim_model, dropout_p=dropout_p, max_len=5000
         )
@@ -475,13 +470,12 @@ class TransformerEncoder(nn.Module):
 
         # Permute to shape (sequence length, batch_size, dim_model)
         src = src.permute(1, 0, 2)
-        # print('pass src permute')
+        
         # Transformer encoder blocks - Out size = (sequence length, batch_size, dim_model)
         encoder_output = self.transformer.encoder(src)
-        # print('pass transformer')
         # Permute back to shape (batch_size, sequence length, dim_model) for output
         encoder_output = encoder_output.permute(1, 0, 2)
-        # print('pass encoder_output permute')
+        
         return encoder_output
 
 class PositionalEncoding(nn.Module):
