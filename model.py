@@ -68,10 +68,7 @@ class DAE(TextModel):
             dropout=args.dropout if args.nlayers > 1 else 0, bidirectional=True)
         self.G = nn.LSTM(args.dim_emb, args.dim_h, args.nlayers,
             dropout=args.dropout if args.nlayers > 1 else 0)
-        self.h2mu = nn.Linear(args.dim_h*2, args.dim_z)
-        self.h2logvar = nn.Linear(args.dim_h*2, args.dim_z)
-        #new add
-        self.h2U = nn.ModuleList([nn.Linear(args.dim_h*2, args.dim_z) for i in range(args.rank)])
+        
 
         self.z2emb = nn.Linear(args.dim_z, args.dim_emb) #for decoder used
         if args.use_transformer:
@@ -80,6 +77,11 @@ class DAE(TextModel):
             self.h2logvar = nn.Linear(args.dim_emb, args.dim_z)
             # #new add
             self.h2U = nn.ModuleList([nn.Linear(args.dim_emb, args.dim_z) for i in range(args.rank)])
+        else:
+            self.h2mu = nn.Linear(args.dim_h*2, args.dim_z)
+            self.h2logvar = nn.Linear(args.dim_h*2, args.dim_z)
+            #new add
+            self.h2U = nn.ModuleList([nn.Linear(args.dim_h*2, args.dim_z) for i in range(args.rank)])
         self.opt = optim.Adam(self.parameters(), lr=args.lr, betas=(0.5, 0.999))
         self.scheduler = optim.lr_scheduler.OneCycleLR(self.opt, max_lr=0.001, steps_per_epoch=args.steps_per_epoch, epochs=args.epochs)
 
@@ -98,15 +100,19 @@ class DAE(TextModel):
 
     def encode(self, input):
         #input = self.drop(self.embed(input)) #not use as there are denoising already
-        input = self.embed(input)                         
-        #_, (h, _) = self.E(input)
-        #h = torch.cat([h[-2], h[-1]], 1)
-        output, (final_hidden_state, final_cell_state) = self.E(input)
-        if self.args.no_Attention:
-            h = torch.cat([final_hidden_state[-2], final_hidden_state[-1]], 1)
+        if self.args.use_transformer:
+            h=self.transformer(input)[0]
+            # print(h.shape)
         else:
-            output = output.permute(1, 0, 2)
-            h, attention = self.attention_net(output, final_hidden_state) #attention : [batch_size, n_step]
+            input = self.embed(input)                         
+            #_, (h, _) = self.E(input)
+            #h = torch.cat([h[-2], h[-1]], 1)
+            output, (final_hidden_state, final_cell_state) = self.E(input)
+            if self.args.no_Attention:
+                h = torch.cat([final_hidden_state[-2], final_hidden_state[-1]], 1)
+            else:
+                output = output.permute(1, 0, 2)
+                h, attention = self.attention_net(output, final_hidden_state) #attention : [batch_size, n_step]
 
         rs = []
         for i in range(self.args.rank):
@@ -170,7 +176,7 @@ class DAE(TextModel):
             # else:
             #     mu, logvar, anchor = self.encode2z(inputs, is_test)
             losses, anchor = self.autoenc(inputs, is_test)
-            return  losses, anchor
+            return  losses, anchor.clone()
         else:
             _inputs = noisy(self.vocab, input, *self.args.noise) if is_test == False else inputs
             mu, logvar = self.encode(_inputs)
@@ -207,7 +213,7 @@ class DAE(TextModel):
         inputs, _ = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
         similar_inputs, _ = tokenization(similar_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
         divergent_inputs, _ = tokenization(divergent_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
-        
+        # print('generate_triplet')
         # mu, logvar, anchor = self(inputs, is_test)
         #print("{0} {1}".format(similar_noises, divergent_noises))
         if self.args.distance_type == 'hamming':
@@ -223,7 +229,7 @@ class DAE(TextModel):
     def autoenc(self, inputs, mu, logvar, anchor, is_test=False, is_evaluate=False):
         if self.args.is_triplet:
             mu, logvar, anchor, positive, negative, used_margin = self.generate_triplet(inputs, is_test)
-            return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin)}, anchor
+            return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin)}, anchor.clone()
         else:
             inputs = convert_sequences_to_kmers(inputs, self.args.k)
             inputs, targets = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)                                                                      
@@ -378,8 +384,9 @@ class AAE(DAE):
                 #     mu, logvar, anchor = self.encode2binary(inputs, is_test)
                 # else:
                 #     mu, logvar, anchor = self.encode2z(inputs, is_test)
+                # print('forward')
                 losses, anchor = self.autoenc(inputs, is_test)
-                return  losses, anchor
+                return  losses, anchor.clone()
             else:
                 loss_d, adv = self.loss_adv(inputs)
                 return loss_d
@@ -400,7 +407,7 @@ class AAE(DAE):
             return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin) if is_evaluate == False else self.triplet_loss_detail(anchor, positive, negative, used_margin),
                 'adv': adv,
                 '|lvar|': logvar.abs().sum(dim=1).mean(),
-                'loss_d': loss_d}, anchor
+                'loss_d': loss_d}, anchor.clone()
         else:
             inputs = convert_sequences_to_kmers(inputs, self.args.k)
             inputs, targets = tokenization(inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)        
@@ -446,6 +453,7 @@ class TransformerEncoder(nn.Module):
         self.dim_model = dim_model
 
         # LAYERS
+        print('')
         self.positional_encoder = PositionalEncoding(
             dim_model=dim_model, dropout_p=dropout_p, max_len=5000
         )
@@ -467,37 +475,33 @@ class TransformerEncoder(nn.Module):
 
         # Permute to shape (sequence length, batch_size, dim_model)
         src = src.permute(1, 0, 2)
-
+        # print('pass src permute')
         # Transformer encoder blocks - Out size = (sequence length, batch_size, dim_model)
         encoder_output = self.transformer.encoder(src)
-
+        # print('pass transformer')
         # Permute back to shape (batch_size, sequence length, dim_model) for output
         encoder_output = encoder_output.permute(1, 0, 2)
-
+        # print('pass encoder_output permute')
         return encoder_output
 
 class PositionalEncoding(nn.Module):
     def __init__(self, dim_model, dropout_p, max_len):
         super().__init__()
-        
-        # Info
         self.dropout = nn.Dropout(dropout_p)
+        self.dim_model = dim_model
+        self.max_len = max_len
+
+    def forward(self, token_embedding):
+        # Calculate positional encodings on the fly
+        position = torch.arange(0, self.max_len).unsqueeze(1).to(token_embedding.device).float()
+        div_term = torch.exp(torch.arange(0, self.dim_model, 2).float() * (-math.log(10000.0) / self.dim_model)).to(token_embedding.device)
         
-        # Encoding - From formula
-        pos_encoding = torch.zeros(max_len, dim_model)
-        positions_list = torch.arange(0, max_len, dtype=torch.float).view(-1, 1) # 0, 1, 2, 3, 4, 5
-        division_term = torch.exp(torch.arange(0, dim_model, 2).float() * (-math.log(10000.0)) / dim_model) # 1000^(2i/dim_model)
+        pe = torch.zeros(self.max_len, self.dim_model).to(token_embedding.device)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
         
-        # PE(pos, 2i) = sin(pos/1000^(2i/dim_model))
-        pos_encoding[:, 0::2] = torch.sin(positions_list * division_term)
-        
-        # PE(pos, 2i + 1) = cos(pos/1000^(2i/dim_model))
-        pos_encoding[:, 1::2] = torch.cos(positions_list * division_term)
-        
-        # Saving buffer (same as parameter without gradients needed)
-        pos_encoding = pos_encoding.unsqueeze(0).transpose(0, 1)
-        self.register_buffer("pos_encoding",pos_encoding)
-        
-    def forward(self, token_embedding: torch.tensor) -> torch.tensor:
-        # Residual connection + pos encoding
-        return self.dropout(token_embedding + self.pos_encoding[:token_embedding.size(0), :])
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        # Only use the required portion of the positional encoding matrix
+        pos_encoding_cloned = pe[:token_embedding.size(0), :].clone()
+        token_embedding = token_embedding + pos_encoding_cloned
+        return self.dropout(token_embedding)

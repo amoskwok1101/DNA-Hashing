@@ -9,7 +9,7 @@ trainFile=/media/data/amos/DAAE/data/seq_tiny.txt
 validFile=/media/data/amos/DAAE/data/seq_tiny.txt
 
 modelPath=/media/data/amos/DAAE/checkpoints/aae_test_multi_gpu
-resume=1 # 0: start from scratch, 1: resume from last checkpoint or model
+resume=0 # 0: start from scratch, 1: resume from last checkpoint or model
 if [ $resume -eq 0 ]; then
     resume_wandb_id=$(python init_wandb.py)
 fi
@@ -25,9 +25,9 @@ while true; do
         --is-triplet --lambda_adv 0 --lambda_sim 0 --lambda_margin 2 \
         --similar-noise 0.05 --divergent-noise 0.2 \
         --lr 0.001 --distance_type cosine \
-        --log-interval 50 \
+        --log-interval 1000 \
         --model-path $modelPath --resume $resume \
-        --no-Attention \
+        --use_transformer
         # --use-wandb --resume-wandb-id $resume_wandb_id 
         #--load-model checkpoints/paae/model.pt
         #--dim_emb 256 --dim_h 512 --dim_z 32 --dim_d 256 --nlayers 1 \
