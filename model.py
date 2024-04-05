@@ -72,11 +72,11 @@ class DAE(TextModel):
 
         self.z2emb = nn.Linear(args.dim_z, args.dim_emb) #for decoder used
         if args.use_transformer:
-            self.transformer = TransformerEncoder(num_tokens=vocab.size, dim_model=args.dim_emb, num_heads=4, num_encoder_layers=2, dropout_p=args.dropout)
-            self.h2mu = nn.Linear(args.dim_emb, args.dim_z)
-            self.h2logvar = nn.Linear(args.dim_emb, args.dim_z)
+            self.transformer = TransformerEncoder(num_tokens=vocab.size, dim_model=args.dim_h, num_heads=4, num_encoder_layers=2, dropout_p=args.dropout,abs_position_encoding=args.abs_position_encoding)
+            self.h2mu = nn.Linear(args.dim_h, args.dim_z)
+            self.h2logvar = nn.Linear(args.dim_h, args.dim_z)
             # #new add
-            self.h2U = nn.ModuleList([nn.Linear(args.dim_emb, args.dim_z) for i in range(args.rank)])
+            self.h2U = nn.ModuleList([nn.Linear(args.dim_h, args.dim_z) for i in range(args.rank)])
         else:
             self.h2mu = nn.Linear(args.dim_h*2, args.dim_z)
             self.h2logvar = nn.Linear(args.dim_h*2, args.dim_z)
@@ -99,10 +99,10 @@ class DAE(TextModel):
         return context, soft_attn_weights.data 
 
     def encode(self, input):
-        
+        #input = self.drop(self.embed(input)) #not use as there are denoising already
         if self.args.use_transformer:
             h=self.transformer(input)[0]
-            
+
         else:
             input = self.embed(input)                         
             #_, (h, _) = self.E(input)
@@ -214,6 +214,7 @@ class DAE(TextModel):
         similar_inputs, _ = tokenization(similar_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
         divergent_inputs, _ = tokenization(divergent_inputs, self.vocab, self.args.device, self.args.seqlen - self.args.k + 1)
         
+        # mu, logvar, anchor = self(inputs, is_test)
         if self.args.distance_type == 'hamming':
             mu, logvar, anchor = self.encode2binary(inputs, is_test)
             _, _, positive = self.encode2binary(similar_inputs, is_test)
@@ -256,6 +257,7 @@ class DAE(TextModel):
         else:
             accelerator.backward(losses['loss'])
             self.opt.step()
+
 
     def nll_is(self, inputs, targets, m):
         """compute negative log-likelihood by importance sampling:
@@ -378,7 +380,10 @@ class AAE(DAE):
     def forward(self, inputs, is_test=False, is_D=False):
         if self.args.is_triplet:
             if is_D==False:
-                
+                # if self.args.distance_type == 'hamming':
+                #     mu, logvar, anchor = self.encode2binary(inputs, is_test)
+                # else:
+                #     mu, logvar, anchor = self.encode2z(inputs, is_test)
                 
                 losses, anchor = self.autoenc(inputs, is_test)
                 return  losses, anchor.clone()
@@ -415,7 +420,7 @@ class AAE(DAE):
 
     def step(self, accelerator, losses, custom_lr=None, is_D=False):
         if is_D == False:
-            super().step(accelerator, losses)
+            super().step(accelerator, losses, custom_lr)
         else:
             if custom_lr is not None:
                 for param_group in self.optD.param_groups:
@@ -441,6 +446,7 @@ class TransformerEncoder(nn.Module):
         num_heads,
         num_encoder_layers,
         dropout_p,
+        abs_position_encoding=False,
     ):
         super().__init__()
 
@@ -448,10 +454,9 @@ class TransformerEncoder(nn.Module):
         self.dim_model = dim_model
 
         # LAYERS
-        
-        self.positional_encoder = PositionalEncoding(
-            dim_model=dim_model, dropout_p=dropout_p, max_len=5000
-        )
+        # self.positional_encoder = PositionalEncoding(
+        #     dim_model=dim_model, dropout_p=dropout_p, max_len=1000
+        # )
         self.embedding = nn.Embedding(num_tokens, dim_model)
         self.transformer = nn.Transformer(
             d_model=dim_model,
@@ -460,22 +465,35 @@ class TransformerEncoder(nn.Module):
             num_decoder_layers=0,  # No decoder layers
             dropout=dropout_p,
         )
-
+        self.pos_embedding = nn.Embedding(65, dim_model)
+        self.dropout = nn.Dropout(dropout_p)
+        self.LayerNorm = nn.LayerNorm(dim_model, eps=1e-8)
+        self.position_encoder = PositionalEncoding(dim_model, dropout_p, max_len=1000)
+        self.abs_position_encoding = abs_position_encoding
     def forward(self, src):
         # Src size must be (batch_size, src sequence length)
-
-        # Embedding + positional encoding - Out size = (batch_size, sequence length, dim_model)
-        src = self.embedding(src) * math.sqrt(self.dim_model)
-        src = self.positional_encoder(src)
-
+        src = src.permute(1, 0)
+        if self.abs_position_encoding:
+            src = self.embedding(src) * math.sqrt(self.dim_model)
+            src = self.position_encoder(src)
+        else:
+            seq_length = src.size(1)
+            # print(seq_length)
+            position_ids = torch.arange(0,seq_length, dtype=torch.long,device = src.device)
+            position_ids = position_ids.unsqueeze(0).expand_as(src)
+            # Embedding + positional encoding - Out size = (batch_size, sequence length, dim_model)
+            embed = self.embedding(src) * math.sqrt(self.dim_model)
+            pos = self.pos_embedding(position_ids)
+            src = embed + pos
+        src = self.dropout(src)
         # Permute to shape (sequence length, batch_size, dim_model)
         src = src.permute(1, 0, 2)
-        
+
         # Transformer encoder blocks - Out size = (sequence length, batch_size, dim_model)
         encoder_output = self.transformer.encoder(src)
         # Permute back to shape (batch_size, sequence length, dim_model) for output
         encoder_output = encoder_output.permute(1, 0, 2)
-        
+
         return encoder_output
 
 class PositionalEncoding(nn.Module):
@@ -484,7 +502,7 @@ class PositionalEncoding(nn.Module):
         self.dropout = nn.Dropout(dropout_p)
         self.dim_model = dim_model
         self.max_len = max_len
-
+        
     def forward(self, token_embedding):
         # Calculate positional encodings on the fly
         position = torch.arange(0, self.max_len).unsqueeze(1).to(token_embedding.device).float()
@@ -498,4 +516,4 @@ class PositionalEncoding(nn.Module):
         # Only use the required portion of the positional encoding matrix
         pos_encoding_cloned = pe[:token_embedding.size(0), :].clone()
         token_embedding = token_embedding + pos_encoding_cloned
-        return self.dropout(token_embedding)
+        return token_embedding

@@ -11,7 +11,7 @@ from model import DAE, VAE, AAE
 from vocab import Vocab
 from meter import AverageMeter
 from utils import set_seed, logging, load_sent, linear_decay_scheduler
-from batchify import get_batches,get_batch_dna
+from batchify import get_batches,get_batch_dna, get_batch
 from noise import noisy
 from Seq_dataset import SeqDataset
 from torch.utils.data import DataLoader
@@ -75,7 +75,7 @@ parser.add_argument('--seqlen', default=64, type=int, metavar='R',
                     help="read length")
 
 # Training arguments
-parser.add_argument('--dropout', type=float, default=0.5, metavar='DROP',
+parser.add_argument('--dropout', type=float, default=0.2, metavar='DROP',
                     help='dropout probability (0 = no dropout)')
 parser.add_argument('--lr', type=float, default=0.0005, metavar='LR',
                     help='learning rate')
@@ -97,7 +97,7 @@ parser.add_argument('--distance_type', default='cosine', metavar='M',
                     help='which distance or similarity is to used in the triplet loss')
 parser.add_argument('--no-Attention', action='store_true',
                     help='indicate to use attention mechanism')
-parser.add_argument('--use_transformer', action='store_true', default=False,
+parser.add_argument('--use-transformer', action='store_true', default=False,
                     help='indicate to use transformer as autoencoder')
 parser.add_argument('--use-amp', action='store_true', 
                     help='whether to use torch.amp (automatic mixed precision)')
@@ -107,6 +107,8 @@ parser.add_argument('--resume-wandb-id', default='',
                    help='resume wandb logging to the run with the given id') 
 parser.add_argument('--use-scheduler', action='store_true',
                     help='whether to use scheduler for learning rate decay')
+parser.add_argument('--abs-position-encoding', action='store_true',
+                    help='whether to use absolute position encoding in transformer')
 
 def evaluate(accelerator, model, batches):
     model.eval()
@@ -132,8 +134,7 @@ def main(args):
         resume = 'must'
 
         wandb_init_kwargs = {
-            "id": args.resume_wandb_id,
-            "project": "DAAE",
+            "project": "DAAE_compare",
             "config": {
                 "model_type": args.model_type,
                 # "vocab_size": args.vocab_size,
@@ -160,8 +161,8 @@ def main(args):
                 # "distance_type": args.distance_type,
                 "no_Attention": args.no_Attention,
                 "use_amp": args.use_amp,
-            },
-            "resume": resume
+            }
+            
         }
 
         wandb.init(**wandb_init_kwargs)
@@ -215,7 +216,7 @@ def main(args):
         logging('load accelerator state from {}'.format(args.save_dir), log_file)
         accelerator.load_state(args.save_dir)
         if (os.path.exists(args.save_dir + '/checkpoint.pt')):
-            ckpt = torch.load(args.save_dir + '/checkpoint.pt')
+            ckpt = torch.load(args.save_dir + '/checkpoint.pt',map_location=device)
             # model.load_state_dict(ckpt['model'])
             # model.flatten()
             logging('load model params from {}'.format(args.save_dir + '/checkpoint_params.pt'), log_file)
@@ -226,7 +227,7 @@ def main(args):
             if 'batch_i' in ckpt:
                 starting_batch = ckpt['batch_i']
         elif (os.path.exists(args.save_dir + '/model.pt')):
-            ckpt = torch.load(args.model_path + '/model.pt')
+            ckpt = torch.load(args.model_path + '/model.pt',map_location=device)
             # model.load_state_dict(ckpt['model'])
             # model.flatten()
             logging('load model params from {}'.format(args.model_path + '/model_params.pt'), log_file)
@@ -248,7 +249,7 @@ def main(args):
         model.train()
         meters = collections.defaultdict(lambda: AverageMeter())
         if args.use_scheduler:
-            custom_lr = linear_decay_scheduler(epoch, args.epochs, initial_learning_rate=0.001, final_learning_rate=0.00001)
+            custom_lr = linear_decay_scheduler(epoch, args.epochs, initial_learning_rate=0.00005, final_learning_rate=0.00001)
         else:
             custom_lr = None
         if starting_batch==0:
@@ -257,7 +258,7 @@ def main(args):
             active_train_dataloader = accelerator.skip_first_batches(train_dataloader,starting_batch)
             # indices = list(range(len(train_batches)))
             # random.shuffle(indices)
-        for i, inputs in tqdm(enumerate(active_train_dataloader), total=len(active_train_dataloader)):
+        for i, inputs in enumerate(active_train_dataloader):
             
             if args.use_amp:
                 with autocast():
@@ -271,7 +272,7 @@ def main(args):
                     accelerator.unwrap_model(model).step(accelerator,losses,custom_lr,is_D=True)   
             else:
                 with accelerator.autocast():
-                    losses,anchor = model(inputs)
+                    losses, anchor = model(inputs)
                     losses['loss'] = accelerator.unwrap_model(model).loss(losses)
                 accelerator.unwrap_model(model).step(accelerator,losses,custom_lr)
                 if args.model_type == 'aae':
@@ -332,7 +333,7 @@ def main(args):
 
         starting_batch = 0
         # remove checkpoint.pt after one epoch
-        if os.path.exists(os.path.join(args.save_dir, 'checkpoint.pt')):
+        if os.path.exists(os.path.join(args.save_dir, 'checkpoint.pt')) and accelerator.is_main_process:
             os.remove(os.path.join(args.save_dir, 'checkpoint.pt'))
     
     if args.use_wandb:
