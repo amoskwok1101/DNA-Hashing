@@ -47,6 +47,8 @@ def load_sent(path):
     sents = []
     with open(path) as f:
         for line in f:
+            # if onebase -> use line.split()
+            # else -> use list(line.strip())
             sents.append(line.split())
     return sents
 

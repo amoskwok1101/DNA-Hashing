@@ -17,7 +17,7 @@ testFile="/home/amos/MgDB/data/100bp_species_virus_seq.fasta_10percent_evenly_10
 # validFile="/home/carloschau_prog2/amos/DAAE/data/merge_112.fasta_rep_seq.fasta_onebase_90percent_evenly_10000_testing"
 # testFile="/home/carloschau_prog2/amos/DAAE/data/merge_112.fasta_rep_seq.fasta_onebase_90percent_evenly_10000_testing"
 # validFile=/home/amos/MgDB/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent_test
-testPython="test_no_act.py"
+testPython="test.py"
 
 medianFile="$modelName-median.pkl"
 
