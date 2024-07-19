@@ -1,51 +1,67 @@
 #!/bin/sh
 
 export TOKENIZERS_PARALLELISM=true
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:6144
 
-#cd /home/d24h_prog2/yytao/SRA/DAAE
-cd /container_data/ytye/SRA/codes/DAAE
-
-#trainFile=./data/dna/10000000_64.txt
-#validFile=./data/dna/100000_64.txt
-#trainFile=./data/dna/4_64.txt
-#validFile=./data/dna/4_64.txt
-
-trainFile=../../data/virus_random_train.txt
-#trainFile=../../real/virus_all.fasta_noAmbiguous_cdhit_onebase_90percent
-validFile=../../data/virus_random_valid.txt
-#validFile=../../real/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent
-
-#reconstruction
-#python train.py --train $trainFile --valid $validFile \
-#    --model_type aae --lambda_adv 10 \
-#    --dim_z 32 --noise 0,0,0,0.05 \
-#    --save-dir checkpoints/daae \
-#    --epochs 100 --batch-size 256
-#    --load-model checkpoints/daae/model.pt
-
-#aae
-modelPath=checkpoints/aae32bits_cosine
-python train.py --train $trainFile --valid $validFile \
-    --model_type aae --epochs 100 --batch-size 4096 \
-    --dim_z 32 --save-dir $modelPath \
-    --is-triplet --lambda_adv 0 --lambda_sim 0 --lambda_margin 1 \
-    --similar-noise 0.05 --divergent-noise 0.5 \
-    --log-interval 1000 --no-Attention \
-    --lr 0.001 --distance_type cosine \
-    #--load-model $modelPath/model.pt
-    #--nlayers 2 \
-    #--dim_emb 256 --dim_h 512 --dim_z 32 --dim_d 256 --nlayers 1 \
+# cd /home/carloschau_prog2/amos/DAAE
 
 
-#vae
-#python train.py --train $trainFile --valid $validFile \
-#    --model_type vae --epochs 10 --batch-size 4096 \
-#    --dim_z 32 --save-dir checkpoints/vae \
-#    --is-triplet --lambda_kl 0.1 \
-#    --similar-noise 0,0,0,0.1 --margin 0.2 \
-#    --divergent-noise 0,0,0,0.2 \
-#    --log-interval 1000 \
-#    --lr 0.0001 \
-    #--load-model checkpoints/dvae/model.pt
-    #--is-binary
-    
+
+# trainFile=/home/carloschau_prog2/amos/DAAE/data/virus_all.fasta_noAmbiguous_cdhit_onebase_90percent
+# trainFile=/home/carloschau_prog2/amos/DAAE/data/6_merge_16.fasta_noAmbiguous_onebase_90percent
+# trainFile=/home/carloschau_prog2/amos/DAAE/data/merge_112.fasta_rep_seq.fasta_onebase_90percent
+# trainFile=/home/carloschau_prog2/tracy/data/combined_2.8.fasta_noAmbiguous_cdhit_onebase_90percent
+# validFile=/home/carloschau_prog2/tracy/data/combined_2.8.fasta_noAmbiguous_cdhit_onebase_10percent
+# trainFile=/home/carloschau_prog2/tracy/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_90percent
+# validFile=/home/carloschau_prog2/tracy/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_10percent
+# trainFile=/home/carloschau_prog2/amos/DAAE/data/100bp_species_virus_seq.fasta_90percent
+# validFile=/home/carloschau_prog2/amos/DAAE/data/100bp_species_virus_seq.fasta_10percent
+# validFile=/home/carloschau_prog2/amos/DAAE/data/merge_112_10percent.fasta_onlyseq
+# validFile=/home/carloschau_prog2/amos/DAAE/data/virus_all.fasta_noAmbiguous_10percent
+# validFile=/home/carloschau_prog2/amos/DAAE/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent
+# validFile=/home/carloschau_prog2/amos/DAAE/data/merge_112.fasta_rep_seq.fasta_onebase_10percent
+# validFile=/home/carloschau_prog2/amos/DAAE/data/6_merge_16.fasta_noAmbiguous_onebase_10percent
+trainFile=/home/amos/MgDB/data/100bp_species_virus_seq.fasta_10percent_evenly_10000_testing
+validFile=/home/amos/MgDB/data/100bp_species_virus_seq.fasta_10percent_evenly_1000_testing
+# trainFile=/home/amos/MgDB/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent_train
+# validFile=/home/amos/MgDB/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent_test
+# modelPath=/home/carloschau_prog2/amos/DAAE/checkpoints/aae_lstm_cnn_cosine_2_8GB_sigmoid_masked_beta_inc
+modelPath=/home/amos/MgDB/checkpoints/dae_cosine_ladder_pearson
+
+resume=0 # 0: start from scratch, 1: resume from last checkpoint or model
+# if [ $resume -eq 0 ]; then
+#     resume_wandb_id=$(/home/carloschau_prog2/miniconda3/envs/py38/bin/python init_wandb.py)
+# fi
+# resume=1
+# resume_wandb_id=1fbbojc9
+# resume_wandb_id=$(/home/carloschau_prog2/miniconda3/envs/py38/bin/python init_wandb.py)
+mkdir -p $modelPath
+while true; do
+    echo "Start training..."
+    python -m accelerate.commands.launch --num_processes=1  train.py --train $trainFile --valid $validFile \
+        --model_type dae --epochs 10 --batch-size 512\
+        --dim_z 32 --save-dir $modelPath \
+        --is-ladder --ladder-pearson --lambda_adv 0 --lambda_sim 0 --lambda_margin 1 --lambda_kl 1 --lambda_quant 0.0000001 \
+        --fixed-lambda-quant --rescaled-margin-type "scaled to dim_z" --similar-noise 0.03 --divergent-noise 0.2 \
+        --lr 0.0001 --distance_type cosine \
+        --log-interval 100 \
+        --model-path $modelPath --resume $resume \
+        --no-Attention \
+        --use-amp
+        # --resume-wandb-id $resume_wandb_id 
+        #--load-model checkpoints/paae/model.pt
+        #--dim_emb 256 --dim_h 512 --dim_z 32 --dim_d 256 --nlayers 1 \
+            
+    exit_status=$?
+
+    # Assuming exit status 0 means success and anything else means failure
+    if [ $exit_status -eq 0 ]; then
+        echo "Training completed successfully."
+        break
+    else
+        echo "Restarting..."
+        resume=1
+        # Optionally, include a sleep command to pause before restarting
+        sleep 60
+    fi
+done

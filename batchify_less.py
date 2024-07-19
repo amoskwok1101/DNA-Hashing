@@ -9,7 +9,7 @@ def get_batch(x, vocab, device):
         padding = [vocab.pad] * (max_len - len(s))
         go_x.append([vocab.go] + s_idx + padding)
         # x_eos.append(s_idx + [vocab.eos] + padding)
-    return torch.LongTensor(go_x).t().contiguous().to(device) # time * batch
+    return torch.LongTensor(go_x).t().contiguous() # time * batch
 
 # def get_batches(data, vocab, batch_size, device):
 #     order = range(len(data))
