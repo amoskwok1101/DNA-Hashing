@@ -282,7 +282,7 @@ if __name__ == '__main__':
     if args.specific_model_file:
         model, train_args = get_model(args.specific_model_file)
     else:
-        model, train_args = get_model(os.path.join(args.checkpoint, 'checkpoint.pt'))
+        model, train_args = get_model(os.path.join(args.checkpoint, 'model.pt'))
 
     if args.evaluate:
         sents = load_sent(args.data)

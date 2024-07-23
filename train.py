@@ -69,6 +69,8 @@ parser.add_argument('--lambda_sim', type=float, default=0, metavar='R',
                     help='weight for dist between anchor and similar relative to triplet loss')
 parser.add_argument('--lambda_margin', type=float, default=2, metavar='R',
                     help='weight for mutaion rate to be the margin in triplet loss')
+parser.add_argument('--lambda_pearson', type=float, default=1.0, metavar='R',
+                    help='weight for pearson loss')
 parser.add_argument('--rank', default=1, type=int, metavar='R',
                     help="number of ranks of perturbation for covariance.")
 parser.add_argument('--k', default=1, type=int, metavar='R',
@@ -99,6 +101,9 @@ parser.add_argument('--is-ladder', action='store_true',
 parser.add_argument('--ladder-beta-type', default='uniform', metavar='M',
                     choices=['uniform', 'ratio'],
                     help='train by ladder loss with different beta weights')
+parser.add_argument('--ladder-loss-type', default='type_1', metavar='M',
+                    choices=['type_1', 'type_2', 'type_3'],
+                    help='train with ladder loss of different implementation')
 parser.add_argument('--ladder-pearson', action='store_true',
                     help='train by ladder loss with pearson correlation')
 parser.add_argument('--is-matry', action='store_true',
@@ -115,7 +120,7 @@ parser.add_argument('--rescaled-margin-type', default='no', metavar='M',
                     choices=['no', 'quadratic','scaled to dim_z'],
                     help='train with rescaled margin')
 parser.add_argument('--distance_type', default='cosine', metavar='M',
-                    choices=['cosine', 'euclidean', 'hamming','cosine_sim','sct','cosine_sim_v2'],
+                    choices=['cosine', 'euclidean', 'hamming','cosine_hard'],
                     help='which distance or similarity is to used in the triplet loss')
 parser.add_argument('--loss-reduction' , default='mean', metavar='M',
                     choices=['mean', 'sum', 'max'],

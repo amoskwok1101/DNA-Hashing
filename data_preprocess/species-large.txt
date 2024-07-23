@@ -1,0 +1,13 @@
+Bubalus_Bubalis
+Macaca_nigra
+Gnathonemus_Longibarbis
+Rhipidura_Dahli
+Macaca_Assamensis
+Melampsora
+Mus_musculus
+Coregonus_Clupeaformis
+Myxocyprinus_Asiaticus
+Peromyscus_Californicus
+Human
+Anas_zonorhyncha
+Camelus_Dromedarius

@@ -7,26 +7,11 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:6144
 
 
 
-# trainFile=/home/carloschau_prog2/amos/DAAE/data/virus_all.fasta_noAmbiguous_cdhit_onebase_90percent
-# trainFile=/home/carloschau_prog2/amos/DAAE/data/6_merge_16.fasta_noAmbiguous_onebase_90percent
-# trainFile=/home/carloschau_prog2/amos/DAAE/data/merge_112.fasta_rep_seq.fasta_onebase_90percent
-# trainFile=/home/carloschau_prog2/tracy/data/combined_2.8.fasta_noAmbiguous_cdhit_onebase_90percent
-# validFile=/home/carloschau_prog2/tracy/data/combined_2.8.fasta_noAmbiguous_cdhit_onebase_10percent
-# trainFile=/home/carloschau_prog2/tracy/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_90percent
-# validFile=/home/carloschau_prog2/tracy/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_10percent
-# trainFile=/home/carloschau_prog2/amos/DAAE/data/100bp_species_virus_seq.fasta_90percent
-# validFile=/home/carloschau_prog2/amos/DAAE/data/100bp_species_virus_seq.fasta_10percent
-# validFile=/home/carloschau_prog2/amos/DAAE/data/merge_112_10percent.fasta_onlyseq
-# validFile=/home/carloschau_prog2/amos/DAAE/data/virus_all.fasta_noAmbiguous_10percent
-# validFile=/home/carloschau_prog2/amos/DAAE/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent
-# validFile=/home/carloschau_prog2/amos/DAAE/data/merge_112.fasta_rep_seq.fasta_onebase_10percent
-# validFile=/home/carloschau_prog2/amos/DAAE/data/6_merge_16.fasta_noAmbiguous_onebase_10percent
+
 trainFile=/home/amos/MgDB_amos/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_10percent_evenly_10000_testing
 validFile=/home/amos/MgDB_amos/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_10percent_evenly_10000_testing
-# trainFile=/home/amos/MgDB/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent_train
-# validFile=/home/amos/MgDB/data/virus_all.fasta_noAmbiguous_cdhit_onebase_10percent_test
-# modelPath=/home/carloschau_prog2/amos/DAAE/checkpoints/aae_lstm_cnn_cosine_2_8GB_sigmoid_masked_beta_inc
-modelPath=/home/amos/MgDB_amos/checkpoints/dae_cosine
+
+modelPath=/home/amos/MgDB_amos/checkpoints/dae_cosine_2
 
 resume=0 # 0: start from scratch, 1: resume from last checkpoint or model
 # if [ $resume -eq 0 ]; then
@@ -39,12 +24,12 @@ mkdir -p $modelPath
 while true; do
     echo "Start training..."
     python -m accelerate.commands.launch --num_processes=1  train.py --train $trainFile --valid $validFile \
-        --model_type dae --epochs 10 --batch-size 512\
+        --model_type dae --epochs 10 --batch-size 512 \
         --dim_z 32 --save-dir $modelPath \
-        --is-ladder --lambda_adv 0 --lambda_sim 0 --lambda_margin 1 --lambda_kl 1 --lambda_quant 0.0 \
+        --is-ladder --ladder-beta-type uniform --ladder-loss-type type_3 --lambda_adv 0 --lambda_sim 0 --lambda_margin 1 --lambda_kl 1 --lambda_quant 0.0 \
         --fixed-lambda-quant --rescaled-margin-type "quadratic" --similar-noise 0.03 --divergent-noise 0.2 \
-        --lr 0.0001 --distance_type cosine \
-        --log-interval 100 \
+        --loss-reduction mean --lr 0.0002 --distance_type cosine \
+        --log-interval 50 \
         --model-path $modelPath --resume $resume \
         --no-Attention \
         --use-amp

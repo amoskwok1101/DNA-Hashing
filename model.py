@@ -311,7 +311,7 @@ class DAE(TextModel):
         
         if self.args.is_ladder:
             if self.args.ladder_pearson:
-                return losses['ladder'] + self.lambda_quant * losses['quant'] + losses['pearson loss']
+                return losses['ladder'] + self.lambda_quant * losses['quant'] + self.args.lambda_pearson * losses['pearson loss']
             return losses['ladder'] + self.lambda_quant * losses['quant']
         elif self.args.is_triplet:
             return losses['triplet'] + self.lambda_quant * losses['quant']
@@ -329,9 +329,9 @@ class DAE(TextModel):
             divergent_noises = [0,0,0,0]
             
             divergent_noises[mutation_type] = divergent_noise
-            # print(inputs.device)
+            
             divergent_inputs = noisy(self.vocab, inputs, *divergent_noises)
-            # print(inputs.size())
+            
             actual_noise = 1 - (global_alignment_batch_with_gap_penalty(divergent_inputs[1:].permute(1,0), inputs[1:].permute(1,0),self.args.device)/ (inputs.size(0) -1))
             if self.args.distance_type == 'hamming':
                 _, _, negative = self.encode2binary(divergent_inputs, is_test)
@@ -410,25 +410,53 @@ class DAE(TextModel):
                 divergences.append(actual_divergence)
             
             
-            ladder_losses = []
-            ladder_loss_sum = 0.0
+            # loop through the noises and switch them if div[i] > div[j] for i < j
             for i in range(len(noises)-1):
                 current_ladder_loss = 0.0
                 for j in range(i+1, len(noises)):
-                    used_margin = torch.abs(divergences[i] - divergences[j])
                     mask = divergences[i] > divergences[j]
                     temp_similar_inputs = noises[i].clone()
                     noises[i][mask,:] = noises[j][mask,:]
                     noises[j][mask,:] = temp_similar_inputs[mask,:]
 
-                    temp_similar_inputs = divergences[i].clone()
+                    temp_similar_inputs_div = divergences[i].clone()
                     divergences[i][mask] = divergences[j][mask]
-                    divergences[j][mask] = temp_similar_inputs[mask]
-                    loss = self.triplet_loss(anchor, noises[i], noises[j], used_margin)
-                    current_ladder_loss += loss
-                ladder_losses.append(current_ladder_loss)
-                ladder_loss_sum += current_ladder_loss
-            ladder_losses = torch.tensor(ladder_losses,device=self.args.device)
+                    divergences[j][mask] = temp_similar_inputs_div[mask]
+                    
+            ladder_losses = []
+            ladder_loss_sum = 0.0
+            # suppose we have noises: [0.03, 0.06, 0.1, 0.2]
+            # type 1: all possible combinations of triplets (follow paper implementation)
+
+            # type 2: treat 0.03 as positive, other negatives
+            # calculate (A, 0.03, 0.06) + (A, 0.03, 0.1) + (A, 0.03, 0.2)
+
+            # type 3: for i<j, treat noises[i] as positive, noises[j] as negative
+            # calculate (A, 0.03, 0.06) + (A, 0.06, 0.1) + (A, 0.1, 0.2)
+            if self.args.ladder_loss_type == 'type_1':
+                for i in range(len(noises)-1):
+                    current_ladder_loss = 0.0
+                    for j in range(i+1, len(noises)):
+                        used_margin = torch.abs(divergences[i] - divergences[j])
+                        loss = self.triplet_loss(anchor, noises[i], noises[j], used_margin)
+                        current_ladder_loss += loss
+                    ladder_losses.append(current_ladder_loss)
+                    ladder_loss_sum += current_ladder_loss
+                ladder_losses = torch.tensor(ladder_losses,device=self.args.device)
+            elif self.args.ladder_loss_type == 'type_2':
+                for j in range(1,len(noises)):
+                    used_margin = torch.abs(divergences[0] - divergences[j])
+                    loss = self.triplet_loss(anchor, noises[0], noises[j], used_margin)
+                    ladder_losses.append(loss)
+                    ladder_loss_sum += loss
+                ladder_losses = torch.tensor(ladder_losses,device=self.args.device)
+            elif self.args.ladder_loss_type == 'type_3':
+                for i in range(len(noises)-1):
+                    used_margin = torch.abs(divergences[i] - divergences[i+1])
+                    loss = self.triplet_loss(anchor, noises[i], noises[i+1], used_margin)
+                    ladder_losses.append(loss)
+                    ladder_loss_sum += loss
+                ladder_losses = torch.tensor(ladder_losses,device=self.args.device)
 
             if self.args.ladder_beta_type == 'ratio':
                 betas = torch.tensor([loss / ladder_loss_sum for loss in ladder_losses],device=self.args.device)
@@ -447,15 +475,11 @@ class DAE(TextModel):
             
             x = torch.transpose(torch.cat([divergence.unsqueeze(0) for divergence in divergences],dim=0),0,1)
             y = torch.transpose(torch.cat(distances, dim=0),0,1)
-            # print(x)
+            
             pearson_coeff = self.pearson_correlation_batch(x,y).mean()
-                    # betas = torch.tensor([1.0 for _ in ladder_losses],device=self.args.device)
+            
                 
-                # if self.iter_num%50==0:
-                #     # print(ladder_loss_sum == torch.sum(ladder_losses))
-                #     # # print(f'betas: {betas}')
-                #     # print(f'quant: {self.quantization_loss(anchor)}')
-                #     print(f'anchor: {anchor[0]}')
+
             return {'ladder': ladder_loss,
                     'pearson coefficient': pearson_coeff,
                     'pearson loss': -pearson_coeff+1,
@@ -518,7 +542,7 @@ class DAE(TextModel):
             copy_from_indices = torch.randint(0, anchor.size(1), (anchor.size(0),))
             copy_to_indices = torch.randint(0, anchor.size(1), (anchor.size(0),))
             anchor[torch.arange(anchor.size(0)), copy_to_indices] = anchor[torch.arange(anchor.size(0)), copy_from_indices]
-        quant_anchor = torch.norm(anchor - torch.sign(anchor), p=2,dim = 1) / self.args.dim_z
+        quant_anchor = torch.sqrt(torch.sum(torch.pow(anchor - torch.sign(anchor), 2))) / self.args.dim_z
         
         
         return quant_anchor.mean()
@@ -526,7 +550,7 @@ class DAE(TextModel):
     def triplet_loss(self, anchor, positive, negative, margin):           
         ###################### the triplet loss ###################################
         if self.args.rescaled_margin_type =='quadratic':
-            margin = margin ** 0.75
+            margin = margin *(margin/0.4)**0.3
         elif self.args.rescaled_margin_type =='scaled to dim_z':
             # difference in 1 mutation -> 1/32 hamming distance
             margin = margin * self.input_seq_len / self.args.dim_z
@@ -554,7 +578,7 @@ class DAE(TextModel):
             pos_dist = 1 - F.cosine_similarity(anchor, positive)
             neg_dist = 1 - F.cosine_similarity(anchor, negative)
             tripletLoss = torch.clamp(margin * lambda_margin + pos_dist - neg_dist + self.args.lambda_sim * pos_dist, min=1e-12)
-        elif self.args.distance_type == 'cosine_sim':
+        elif self.args.distance_type == 'cosine_hard':
             # impose higher penalty on hard triplets
             pos_dist = 1 - F.cosine_similarity(anchor, positive)
             neg_dist = 1 - F.cosine_similarity(anchor, negative) 
@@ -569,25 +593,25 @@ class DAE(TextModel):
             tripletLoss_easy = torch.clamp(margin_easy * lambda_margin + pos_dist_easy - neg_dist_easy + self.args.lambda_sim * pos_dist_easy, min=1e-12)
             tripletLoss_hard = torch.clamp(margin_hard * lambda_margin + pos_dist_hard - neg_dist_hard + self.args.lambda_sim * pos_dist_hard, min=1e-12)
             tripletLoss = (tripletLoss_easy + 2*tripletLoss_hard) / len(pos_dist)
-        else:
-            # impose higher penalty on hard triplets and when divergence margin > 0
-            pos_dist = 1 - F.cosine_similarity(anchor, positive)
-            neg_dist = 1 - F.cosine_similarity(anchor, negative) 
-            hard_mask = (pos_dist > neg_dist) 
-            # margin_threshold = 1.0 / self.input_seq_len
-            pos_dist_easy = pos_dist[~hard_mask & (margin > 0 )]
-            neg_dist_easy = neg_dist[~hard_mask& (margin > 0)]
-            margin_easy = margin[~hard_mask& (margin > 0)]
-            pos_dist_hard = pos_dist[hard_mask& (margin > 0)]
-            neg_dist_hard = neg_dist[hard_mask& (margin > 0)]
-            margin_hard = margin[hard_mask& (margin > 0)]
-            tripletLoss_easy = torch.clamp(margin_easy * lambda_margin + pos_dist_easy - neg_dist_easy + self.args.lambda_sim * pos_dist_easy, min=1e-12)
-            tripletLoss_hard = torch.clamp(margin_hard * lambda_margin + pos_dist_hard - neg_dist_hard + self.args.lambda_sim * pos_dist_hard, min=1e-12)
-            # minimize distance spread when divergence margin = 0
-            pos_dist_eq = pos_dist[margin == 0]
-            neg_dist_eq = neg_dist[margin == 0]
-            eq_loss = torch.clamp(torch.abs(pos_dist_eq - neg_dist_eq), min=1e-12)
-            tripletLoss = (tripletLoss_easy + 3*tripletLoss_hard + eq_loss) / len(pos_dist)
+        # else:
+        #     # impose higher penalty on hard triplets and when divergence margin > 0
+        #     pos_dist = 1 - F.cosine_similarity(anchor, positive)
+        #     neg_dist = 1 - F.cosine_similarity(anchor, negative) 
+        #     hard_mask = (pos_dist > neg_dist) 
+        #     # margin_threshold = 1.0 / self.input_seq_len
+        #     pos_dist_easy = pos_dist[~hard_mask & (margin > 0 )]
+        #     neg_dist_easy = neg_dist[~hard_mask& (margin > 0)]
+        #     margin_easy = margin[~hard_mask& (margin > 0)]
+        #     pos_dist_hard = pos_dist[hard_mask& (margin > 0)]
+        #     neg_dist_hard = neg_dist[hard_mask& (margin > 0)]
+        #     margin_hard = margin[hard_mask& (margin > 0)]
+        #     tripletLoss_easy = torch.clamp(margin_easy * lambda_margin + pos_dist_easy - neg_dist_easy + self.args.lambda_sim * pos_dist_easy, min=1e-12)
+        #     tripletLoss_hard = torch.clamp(margin_hard * lambda_margin + pos_dist_hard - neg_dist_hard + self.args.lambda_sim * pos_dist_hard, min=1e-12)
+        #     # minimize distance spread when divergence margin = 0
+        #     pos_dist_eq = pos_dist[margin == 0]
+        #     neg_dist_eq = neg_dist[margin == 0]
+        #     eq_loss = torch.clamp(torch.abs(pos_dist_eq - neg_dist_eq), min=1e-12)
+        #     tripletLoss = (tripletLoss_easy + 3*tripletLoss_hard + eq_loss) / len(pos_dist)
             #tripletLoss = self.cosine_margin_triplet_loss(anchor, positive, negative, margin)
         # if self.args.is_quant:
             # if self.iter_num%1000==0:
@@ -642,8 +666,10 @@ class DAE(TextModel):
         denominator = torch.sqrt(torch.sum((x - mean_x) ** 2, dim=1) * torch.sum((y - mean_y) ** 2, dim=1))
 
         # Handle the case of zero variance
-        denominator = torch.where(denominator == 0, torch.tensor(float('inf'),device=self.args.device), denominator)
-
+        numerator = torch.where(denominator == 0, torch.tensor(0,device=self.args.device), numerator)
+        denominator = torch.where(denominator == 0, torch.tensor(1,device=self.args.device), denominator)
+        epsilon = 1e-6  # Small constant to prevent numerical instability
+        denominator = denominator + epsilon
         # Calculate the Pearson correlation coefficient
         correlation = numerator / denominator
 
