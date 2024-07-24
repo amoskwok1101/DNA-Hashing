@@ -98,6 +98,8 @@ parser.add_argument('--is-triplet', action='store_true',
                     help='train by triplet loss')
 parser.add_argument('--is-ladder', action='store_true',
                     help='train by ladder loss')
+parser.add_argument('--is-mse', action='store_true',
+                    help='train by mse loss')
 parser.add_argument('--ladder-beta-type', default='uniform', metavar='M',
                     choices=['uniform', 'ratio'],
                     help='train by ladder loss with different beta weights')
@@ -139,8 +141,7 @@ parser.add_argument('--use-scheduler', action='store_true',
                     help='whether to use scheduler for learning rate decay')
 parser.add_argument('--use-cnn', action='store_true',
                     help='whether to use CNN layer on top of LSTM')
-# parser.add_argument('--abs-position-encoding', action='store_true',
-#                     help='whether to use absolute position encoding in transformer')
+
 def create_average_meter():
     return AverageMeter()
 

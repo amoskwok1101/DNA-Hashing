@@ -11,7 +11,7 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:6144
 trainFile=/home/amos/MgDB_amos/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_10percent_evenly_10000_testing
 validFile=/home/amos/MgDB_amos/data/virus_species_v2.fasta_rep_seq_cdhit80.fasta_onebase_10percent_evenly_10000_testing
 
-modelPath=/home/amos/MgDB_amos/checkpoints/dae_cosine_2
+modelPath=/home/amos/MgDB_amos/checkpoints/dae_cosine_mse
 
 resume=0 # 0: start from scratch, 1: resume from last checkpoint or model
 # if [ $resume -eq 0 ]; then
@@ -26,7 +26,7 @@ while true; do
     python -m accelerate.commands.launch --num_processes=1  train.py --train $trainFile --valid $validFile \
         --model_type dae --epochs 10 --batch-size 512 \
         --dim_z 32 --save-dir $modelPath \
-        --is-ladder --ladder-beta-type uniform --ladder-loss-type type_3 --lambda_adv 0 --lambda_sim 0 --lambda_margin 1 --lambda_kl 1 --lambda_quant 0.0 \
+        --is-mse --lambda_adv 0 --lambda_sim 0 --lambda_margin 1 --lambda_kl 1 --lambda_quant 0.0 \
         --fixed-lambda-quant --rescaled-margin-type "quadratic" --similar-noise 0.03 --divergent-noise 0.2 \
         --loss-reduction mean --lr 0.0002 --distance_type cosine \
         --log-interval 50 \

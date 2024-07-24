@@ -1,0 +1,54 @@
+--train FILE          path to training file
+--valid FILE          path to validation file
+--save-dir DIR        directory to save checkpoints and outputs
+--load-model FILE     path to load checkpoint if specified
+--model-path FILE     path to load model and log if specified
+--resume RESUME       resume from the previous best model
+--vocab-size N        keep N most frequent words in vocabulary
+--dim_z D             dimension of latent variable z
+--dim_emb D           dimension of word embedding
+--dim_h D             dimension of hidden state per layer
+--nlayers N           number of layers in LSTM
+--dim_d D             dimension of hidden state in AAE discriminator
+--model_type M        which model to learn
+--lambda_kl R         weight for kl term in VAE
+--lambda_quant R      weight for quantization loss
+--lambda_adv R        weight for adversarial loss in AAE
+--lambda_p R          weight for L1 penalty on posterior log-variance
+--similar-noise P     similar noise for word drop prob, add_prob, substitute prob or any_prob
+--divergent-noise P   divergent noise (maximum) for word drop prob, add_prob, substitute prob or any_prob
+--lambda_sim R        weight for dist between anchor and similar relative to triplet loss
+--lambda_margin R     weight for mutaion rate to be the margin in triplet loss
+--lambda_pearson R    weight for pearson loss
+--rank R              number of ranks of perturbation for covariance.
+--k R                 k-mers
+--seqlen R            read length
+--dropout DROP        dropout probability (0 = no dropout)
+--lr LR               learning rate
+--epochs N            number of training epochs
+--batch-size N        batch size
+--no-cuda             disable CUDA
+--log-interval N      report interval
+--is-triplet          train by triplet loss
+--is-ladder           train by ladder loss
+--is-mse              train by mse loss
+--ladder-beta-type M  train by ladder loss with different beta weights [ratio, uniform (1)] 
+--ladder-loss-type M  train with ladder loss of different implementation [type_1, type_2, type_3] (refer to model.py line 430 - 437)
+--ladder-pearson      train by ladder loss with pearson correlation
+--is-matry            train with matryoshka loss
+--is-tanh             train with tanh
+--fixed-lambda-quant  fixed lambda quant instead of increasing it
+--is-quant-reparam    train with quantization reparametrization
+--copy-quant          alter anchor by copying during quantization
+--rescaled-margin-type M
+                    train with rescaled margin [quadratic, scaled to dim_z, no]
+--distance_type M     which distance or similarity is to used in the triplet loss ['cosine', 'euclidean', 'hamming','cosine_hard']
+--loss-reduction M    which reduction method is to used in the loss ['mean', 'sum', 'max']
+--no-Attention        indicate to use attention mechanism
+--use-transformer     indicate to use transformer as autoencoder
+--use-amp             whether to use torch.amp (automatic mixed precision)
+--use-wandb           whether to use wandb for logging
+--resume-wandb-id RESUME_WANDB_ID
+                    resume wandb logging to the run with the given id
+--use-scheduler       whether to use scheduler for learning rate decay
+--use-cnn             whether to use CNN layer on top of LSTM

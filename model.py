@@ -280,7 +280,7 @@ class DAE(TextModel):
     def forward(self, inputs, is_test=False,is_evaluate=False):
         self.input_seq_len = inputs.size(0) - 1
         self.iter_num = self.args.epoch_i * self.args.train_batch_num + self.args.batch_i
-        if self.args.is_triplet or self.args.is_ladder or self.args.is_clr:
+        if self.args.is_triplet or self.args.is_ladder or self.args.is_mse:
             
             if self.args.distance_type == 'hamming':
                 mu, logvar, anchor =  self.encode2binary(inputs, is_test)
@@ -315,6 +315,8 @@ class DAE(TextModel):
             return losses['ladder'] + self.lambda_quant * losses['quant']
         elif self.args.is_triplet:
             return losses['triplet'] + self.lambda_quant * losses['quant']
+        elif self.args.is_mse:
+            return losses['mse'] + self.lambda_quant * losses['quant']
         else:
             return losses['rec']
         
@@ -322,7 +324,7 @@ class DAE(TextModel):
         
     def generate_triplet(self, inputs, similar_noise, divergent_noise, is_test=False):
         
-        if self.args.is_ladder:
+        if self.args.is_ladder or self.args.is_mse:
             probabilities = [1/4, 1/4, 1/4, 1/4]
             mutation_type = np.random.choice([0, 1, 2, 3], p=probabilities)
             # mutation_type = np.random.randint(0,4)
@@ -486,7 +488,7 @@ class DAE(TextModel):
                     'quant': self.quantization_loss(anchor) if not self.args.is_quant_reparam else self.quantization_loss(self.encode2z(inputs, is_test, is_reparameterize=True)[2])}
 
             
-        if self.args.is_triplet:
+        elif self.args.is_triplet:
             positive, negative, used_margin, mutation_rate = self.generate_triplet(inputs, self.args.similar_noise, self.args.divergent_noise, is_test)
             if self.args.is_matry:
                 # matryoshka representation learning
@@ -501,6 +503,16 @@ class DAE(TextModel):
             else:
                 return {'triplet': self.triplet_loss(anchor, positive, negative, used_margin),
                         'quant': self.quantization_loss(anchor) if not self.args.is_quant_reparam else self.quantization_loss(self.encode2z(inputs, is_test, is_reparameterize=True)[2])}
+        elif self.args.is_mse:
+            noise = np.random.uniform(self.args.similar_noise, self.args.divergent_noise)
+            negative, divergence = self.generate_triplet(inputs, noise, noise, is_test)
+            if self.args.distance_type == 'euclidean':
+                distances = self.euclidean_distance(anchor, negative)
+            elif self.args.distance_type == 'cosine':
+                distances = 1 - F.cosine_similarity(anchor, negative)
+            mse = torch.mean((distances - divergence) ** 2)
+            return {'mse': mse,
+                    'quant': self.quantization_loss(anchor) if not self.args.is_quant_reparam else self.quantization_loss(self.encode2z(inputs, is_test, is_reparameterize=True)[2])}
         else:
             # _, _, _, logits = self(inputs, is_test)
             return {'rec': self.loss_rec(logits, targets).mean()}

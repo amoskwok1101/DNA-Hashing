@@ -1,5 +1,5 @@
 # Preprocess FASTA to training data
-**Raw species files are situated on Prog2 Account, so please perform data preprocess on Prog2 Account**
+**Raw species files are situated on Prog2 Account, so please perform data preprocess (except cdhit) on Prog2 Account**
 
 **species-small.txt & virus.txt** are the fasta file that I usually use to produce those small dataset (e.g. 2.46GB dataset), while files with filename in **species-large.txt** take much longer time to preprocess.
 
@@ -39,7 +39,7 @@ Run ./removeAmbiguous to reduce fasta file size before running mmseq or cdhit
 
 ## 4. Run mmseq 2/3 times on individual/merged files to reduce file size
 ```
-# easy linclust suitable for large fasta file
+# easy-linclust suitable for large fasta file
 mmseqs easy-cluster/easy-linclust $input $output $tmp_folder --min-seq-id 0.8 --threads 32
 ```
 For $tmp_folder, just create any empty directory for mmseq to output intermediate files.
