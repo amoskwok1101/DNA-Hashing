@@ -27,6 +27,29 @@ To run training with more than 1 gpu, modify the --num_processes as desired
 python -m accelerate.commands.launch --num_processes=1  train.py --train $trainFile --valid $validFile
 ```
 
+for detailed model training arguments, please refer to model_flag.txt
+
+## Submit job to HPC using pbs script
+
+Check node status using
+```
+pbsnodes -aSj
+```
+
+Below is a snippet of the command output
+```
+                                                        mem       ncpus   nmics   ngpus
+vnode           state           njobs   run   susp      f/t        f/t     f/t     f/t   jobs
+--------------- --------------- ------ ----- ------ ------------ ------- ------- ------- -------
+hpc-gn001       free                 3     3      0      1tb/1tb   20/48     0/0     0/4 99351.hpc-hn001,99393.hpc-hn001,99351.hpc-hn001
+hpc-gn002       free                 1     1      0      1tb/1tb   43/48     0/0     0/4 99179.hpc-hn001
+hpc-gn003       free                 2     2      0    872gb/1tb   17/48     0/0     0/4 99420.hpc-hn001,99408.hpc-hn001
+hpc-gn004       job-busy             2     2      0    872gb/1tb    0/48     0/0     0/4 97043.hpc-hn001,97520.hpc-hn001
+```
+**For model training, submit job to hpc-gn00x to use gpu(s). Mainly focus on ncpus and ngpus f(ree)/t(otal) when deciding amount of resources for your job(s)**
+
+For instruction on writting pbs script, refer to **train.pbs**.
+
 ## Run Test after training
 
 ```

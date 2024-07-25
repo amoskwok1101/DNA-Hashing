@@ -10,7 +10,7 @@ conda install -c bioconda seqkit
 conda install -c conda-forge -c bioconda mmseqs2
 ```
 ## 2. Using sliding window to slice raw seq to 100/64/32bp files
-Modify below parameter in preprocess.py for your use
+Modify below parameter in **preprocess.py** for your use
 ```
 INPUT_FOLDER_PATH = "/home/d24h_prog2/isaac-wu/dnabert2-inputs-preprocess/inputs"
 OUTPUT_FOLDER_PATH = "/home/d24h_prog2/amos/virus-species-output-32"
@@ -50,21 +50,29 @@ The output will be:
 
 ($output)_cluster.tsv
 
-($output)_rep_seq.fasta **we only need this file**
+($output)_rep_seq.fasta **(we only need this file)**
 
 **Note: depends on the file size, you may run mmseq on individual, merged or splitted file (Refer to appendix for split using seqkit)**
 
 ## 5. Run cdhit 0.8 for better filtering
 ```
-cd-hit/cd-hit-est -i $input -c 0.8 -o $output -M 0 -T 0
+$cdhit_script_path -i $input -c 0.8 -o $output -M 0 -T 0
 ```
+cdhit script path:
+
+/home/carloschau_prog2/amos/cd-hit (carlos account)
+
+/home/d24h_prog2/isaac-wu/dnabert2-inputs-preprocess/cd-hit/cd-hit-est (prog2)
+
 -c  sequence identity threshold, default 0.9 (output will have <0.9 similarity);
+
 -M	memory limit (in MB) for the program, default 800; 0 for unlimitted;
+
 -T	number of threads, default 1; with 0, all CPUs will be used
 
 The output will be:
 
-($output) **we only need this**
+($output) **(we only need this)**
 
 ($output).clstr 
 
@@ -79,7 +87,9 @@ seqkit split2 -p 4 -j 4 -O $output_dir $input_file_path
 -j, --threads int   number of CPUs
 
 Suppose your $input_file_path: test.fasta
+
 The output will be:
+
 test.part_00{1-n}.fasta
 
 ## Use Carlos account to run cdhit

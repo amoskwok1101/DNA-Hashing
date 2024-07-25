@@ -1,0 +1,21 @@
+#!/bin/sh
+#PBS -N dna_hash_ladder
+## Submit job name as dna_hash_ladder
+#PBS -q gpuq1
+## Submit to gpuq1
+#PBS -l walltime=200:00:00
+## Maximum run time set to 200 hours
+#PBS -l select=1:ncpus=11:ngpus=2:mem=512gb
+## Request 1 node 11 core,1 GPU and 512gb ram
+#PBS -k oed
+#PBS -o /path/to/log_directory/dna_hash_ladder_output.log    ## Specify the output log file
+#PBS -e /path/to/log_directory/dna_hash_ladder_error.log     ## Specify the error log file
+#PBS -V
+## export environment variables to job env (e.g. PATH, LD_LIBRARY_PATH)
+
+module load python3 cuda11.0/toolkit/11.0.3 cudnn8.0-cuda11.0/8.0.5.39
+
+cd /home/carloschau_prog2/amos/DAAE/
+
+chmod +x runTrain.sh
+./runTrain.sh
