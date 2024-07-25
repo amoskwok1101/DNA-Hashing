@@ -46,9 +46,28 @@ hpc-gn002       free                 1     1      0      1tb/1tb   43/48     0/0
 hpc-gn003       free                 2     2      0    872gb/1tb   17/48     0/0     0/4 99420.hpc-hn001,99408.hpc-hn001
 hpc-gn004       job-busy             2     2      0    872gb/1tb    0/48     0/0     0/4 97043.hpc-hn001,97520.hpc-hn001
 ```
-**For model training, submit job to hpc-gn00x to use gpu(s). Mainly focus on ncpus and ngpus f(ree)/t(otal) when deciding amount of resources for your job(s)**
+**For model training, submit job to gpuq1. Mainly focus on ncpus and ngpus f(ree)/t(otal) when deciding amount of resources for your job(s). Your job will be allocated to a free node by the system**
 
 For instruction on writting pbs script, refer to **train.pbs**.
+
+To submit job, run 
+```
+qsub $your_pbs_script
+```
+
+You should then see your job status with
+```
+qstat
+```
+
+```
+Job id            Name             User              Time Use S Queue
+----------------  ---------------- ----------------  -------- - -----
+99420.hpc-hn001   dna_hash_ladder  carloschau_prog2  33:12:55 R gpuq1           
+99421.hpc-hn001   dna_hash_ladder  carloschau_prog2  00:31:52 R gpuq1           
+99422.hpc-hn001   dna_hash_ladder  carloschau_prog2         0 Q gpuq1           
+```
+if your job is running S(tatus) will be R, Q means your job is on queue.
 
 ## Run Test after training
 
