@@ -29,6 +29,9 @@ run_embedding_all (){
 
 run_embedding_all
 
+# plot embedding histogram
+python plot_dim.py
+
 echo "Run test retrieval"
 run_test_retrieval (){
     cd $projectPath
