@@ -60,11 +60,11 @@ $cdhit_script_path -i $input -c 0.8 -o $output -M 0 -T 0
 ```
 cdhit script path:
 
-/home/carloschau_prog2/amos/cd-hit (carlos account)
+/home/carloschau_prog2/amos/cd-hit/cd-hit-est (carlos account)
 
 /home/d24h_prog2/isaac-wu/dnabert2-inputs-preprocess/cd-hit/cd-hit-est (prog2)
 
--c  sequence identity threshold, default 0.9 (output will have <0.9 similarity);
+-c  sequence identity threshold, default 0.9 (output will have < 0.9 similarity);
 
 -M	memory limit (in MB) for the program, default 800; 0 for unlimitted;
 

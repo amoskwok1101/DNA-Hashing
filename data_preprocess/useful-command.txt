@@ -1,0 +1,16 @@
+# chunk raw sequences to N bp sequences
+python preprocess.py
+
+# run noAmbiguous
+./runAmbiguous $fasta-file
+
+# run mmseq 0.8
+mmseqs easy-linclust $input $output $tmp_folder --min-seq-id 0.8 --threads 32 # large file
+mmseqs easy-cluster $input $output $tmp_folder --min-seq-id 0.8 --threads 32 # small file
+
+# seqkit split2
+seqkit split2 -p 4 -j 4 -O $output_dir $input_file_path
+
+# cdhit 0.8
+/home/carloschau_prog2/amos/cd-hit/cd-hit-est -i $input -c 0.8 -o $output -M 0 -T 0
+/home/d24h_prog2/isaac-wu/dnabert2-inputs-preprocess/cd-hit/cd-hit-est -i $input -c 0.8 -o $output -M 0 -T 0
