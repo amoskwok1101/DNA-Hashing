@@ -1,4 +1,5 @@
-# MgDB
+# DNA Hashing
+This repo include scripts to train and test encoder model to encode DNA sequences in binary codes for fast retrieval
 
 ## Preparation
 
